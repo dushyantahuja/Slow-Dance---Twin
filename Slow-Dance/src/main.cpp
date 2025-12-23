@@ -3,6 +3,17 @@
 #include <WebServer.h>
 #include <ElegantOTA.h>
 
+// Debug configuration
+#define DEBUG  // Comment out to disable debug output
+
+#ifndef DEBUG_PRINT
+#ifdef DEBUG
+#define DEBUG_PRINT(x) Serial.println(x)
+#else
+#define DEBUG_PRINT(x)
+#endif
+#endif
+
 // WiFi credentials - CHANGE THESE!
 const char* ssid = "DUSHYANT-NEW";
 const char* password = "ahuja987";
@@ -10,10 +21,11 @@ const char* password = "ahuja987";
 // GPIO pins
 const int LED_PIN = 27;
 const int MAGNET_PIN = 14;
+const int MAGNET2_PIN = 12;
 const int BUTTON_PIN = 26;
 
 // Frequencies in Hz
-const float LED_FREQ = 80.1;
+const float LED_FREQ = 80.5;
 const float MAGNET_FREQ = 79.8;
 
 // Duty cycles (0.0 to 1.0)
@@ -60,6 +72,7 @@ void IRAM_ATTR onMagnetTimer() {
   
   magnetState = !magnetState;
   digitalWrite(MAGNET_PIN, magnetState);
+  digitalWrite(MAGNET2_PIN, magnetState);  // Both magnets in sync
   
   // Restart timer with next period
   timerRestart(magnetTimer);
@@ -80,28 +93,35 @@ void IRAM_ATTR onButtonPress() {
 }
 
 void setup() {
+  #ifdef DEBUG
   Serial.begin(115200);
   delay(1000);
-  Serial.println("\nESP32 Precise PWM with OTA Updates");
+  #endif
+  
+  DEBUG_PRINT("\nESP32 Precise PWM with OTA Updates");
   
   // Configure GPIO pins
   pinMode(LED_PIN, OUTPUT);
   pinMode(MAGNET_PIN, OUTPUT);
+  pinMode(MAGNET2_PIN, OUTPUT);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   
   // Attach button interrupt (triggers on falling edge when button pressed)
   attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onButtonPress, FALLING);
   
-  // Test: Turn on magnet directly first
-  Serial.println("Testing magnet pin directly...");
+  // Test: Turn on both magnets directly first
+  DEBUG_PRINT("Testing magnet pins directly...");
   digitalWrite(MAGNET_PIN, HIGH);
+  digitalWrite(MAGNET2_PIN, HIGH);
   delay(1000);
   digitalWrite(MAGNET_PIN, LOW);
+  digitalWrite(MAGNET2_PIN, LOW);
   delay(500);
-  Serial.println("Direct test complete");
+  DEBUG_PRINT("Direct test complete");
   
   digitalWrite(LED_PIN, LOW);
   digitalWrite(MAGNET_PIN, LOW);
+  digitalWrite(MAGNET2_PIN, LOW);
   
   // Calculate periods in microseconds
   float ledPeriodUs = 1000000.0f / LED_FREQ;
@@ -117,6 +137,7 @@ void setup() {
   float actualLedFreq = 1000000.0f / (ledHighUs + ledLowUs);
   float actualMagnetFreq = 1000000.0f / (magnetHighUs + magnetLowUs);
   
+  #ifdef DEBUG
   Serial.printf("\nLED Configuration:\n");
   Serial.printf("  Target: %.2f Hz, %.0f%% duty\n", LED_FREQ, LED_DUTY * 100);
   Serial.printf("  Actual: %.2f Hz\n", actualLedFreq);
@@ -126,67 +147,83 @@ void setup() {
   Serial.printf("  Target: %.2f Hz, %.0f%% duty\n", MAGNET_FREQ, MAGNET_DUTY * 100);
   Serial.printf("  Actual: %.2f Hz\n", actualMagnetFreq);
   Serial.printf("  Period: %d us high, %d us low\n\n", magnetHighUs, magnetLowUs);
+  #endif
   
   // Connect to WiFi
-  Serial.print("Connecting to WiFi");
+  DEBUG_PRINT("Connecting to WiFi");
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   
   int wifiTimeout = 0;
   while (WiFi.status() != WL_CONNECTED && wifiTimeout < 20) {
     delay(500);
+    #ifdef DEBUG
     Serial.print(".");
+    #endif
     wifiTimeout++;
   }
   
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi connected!");
+    DEBUG_PRINT("\nWiFi connected!");
+    #ifdef DEBUG
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
     Serial.print("OTA URL: http://");
     Serial.print(WiFi.localIP());
     Serial.println("/update");
+    #endif
   } else {
-    Serial.println("\nWiFi connection failed - continuing without OTA");
+    DEBUG_PRINT("\nWiFi connection failed - continuing without OTA");
   }
   
   // Initialize ElegantOTA
+  server.on("/", HTTP_GET, []() {
+    server.send(200, "text/html", 
+      "<html><body><h1>ESP32 Slow Motion Controller</h1>"
+      "<p>Device is running!</p>"
+      "<p><a href='/update'>Go to OTA Update</a></p>"
+      "</body></html>");
+  });
+  
   ElegantOTA.begin(&server);
   server.begin();
-  Serial.println("Web server started");
+  DEBUG_PRINT("Web server started");
   
-  Serial.println("\nCreating timers...");
+  DEBUG_PRINT("\nCreating timers...");
   
   // Create timers with 1MHz frequency (1us resolution)
   ledTimer = timerBegin(1000000);
   magnetTimer = timerBegin(1000000);
   
   if (ledTimer == NULL || magnetTimer == NULL) {
-    Serial.println("ERROR: Failed to create timers!");
+    DEBUG_PRINT("ERROR: Failed to create timers!");
     return;
   }
   
-  Serial.println("Attaching interrupts...");
+  DEBUG_PRINT("Attaching interrupts...");
   
   // Attach interrupt handlers
   timerAttachInterrupt(ledTimer, &onLedTimer);
   timerAttachInterrupt(magnetTimer, &onMagnetTimer);
   
-  Serial.println("Starting timers...");
+  DEBUG_PRINT("Starting timers...");
   
   // Start with LOW period
   timerAlarm(ledTimer, ledLowUs, false, 0);
   timerAlarm(magnetTimer, magnetLowUs, false, 0);
   
-  Serial.println("\n=================================");
-  Serial.println("PWM running!");
-  Serial.println("=================================\n");
+  DEBUG_PRINT("\n=================================");
+  DEBUG_PRINT("PWM running!");
+  DEBUG_PRINT("=================================\n");
 }
 
 void loop() {
-  // Handle web server
+  // Handle web server - MUST be called frequently
   server.handleClient();
-  ElegantOTA.loop();
+  
+  #ifdef DEBUG
+  ElegantOTA.loop();  // Only needed for debug progress
+  #endif
   
   // Handle button press
   if (buttonPressed) {
@@ -198,12 +235,13 @@ void loop() {
       deviceEnabled = !deviceEnabled;
       
       if (deviceEnabled) {
-        Serial.println("\n>>> DEVICE ENABLED <<<");
+        DEBUG_PRINT("\n>>> DEVICE ENABLED <<<");
         // Reset states and let timers resume
         ledState = false;
         magnetState = false;
         digitalWrite(LED_PIN, LOW);
         digitalWrite(MAGNET_PIN, LOW);
+        digitalWrite(MAGNET2_PIN, LOW);
         
         // Restart timers
         timerRestart(ledTimer);
@@ -211,10 +249,11 @@ void loop() {
         timerAlarm(ledTimer, ledLowUs, false, 0);
         timerAlarm(magnetTimer, magnetLowUs, false, 0);
       } else {
-        Serial.println("\n>>> DEVICE DISABLED <<<");
+        DEBUG_PRINT("\n>>> DEVICE DISABLED <<<");
         // Turn everything off immediately
         digitalWrite(LED_PIN, LOW);
         digitalWrite(MAGNET_PIN, LOW);
+        digitalWrite(MAGNET2_PIN, LOW);
         ledState = false;
         magnetState = false;
       }
@@ -228,6 +267,7 @@ void loop() {
   }
   
   // Debug output every 5 seconds
+  #ifdef DEBUG
   static unsigned long lastDebug = 0;
   if (millis() - lastDebug > 5000) {
     Serial.printf("Status: %s | LED: %d, Magnet: %d | IP: %s\n", 
@@ -236,6 +276,7 @@ void loop() {
                   WiFi.localIP().toString().c_str());
     lastDebug = millis();
   }
+  #endif
   
   delay(10);
 }
